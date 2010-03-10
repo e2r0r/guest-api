@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+#-*- encoding:utf-8 -*-
+
+import web
+import time
+import math
+import simplejson
+from pymongo import Connection
+import thread
+import base64
+
+urls = ('/g/(.*)','guests')
+app = web.application(urls,globals())
+
+def gettime(ts):
+    if  ts < 2 :
+        return '刚刚'
+    else:
+        periods = (('年',31556926),('月',2629744),('周',604800),('天',86400),('小时',3600),('分钟',60),('秒钟',1))
+        for q in periods:
+            x = int(math.floor(ts/q[1]))
+            ts -= x*q[1]
+            if x > 0:
+                st = str(x) + q[0]
+                break;
+        return st+'前'
+
+def mongo_connect(database = 'bluker',connection = 'photo',host = 'localhost',port = 27017):
+    conn = Connection(host,port)
+    return conn[database][connection]
+
+
+class guests:
+    def GET(self,nc):
+        qs = web.input(obj='photo',objid=0,guest_uid=0,guest_ts=time.time(),jsoncallback = '1')
+        obj = str(qs.obj)
+        pos = (obj == 'user') and 9 or 15
+        now = time.time()
+        conn = mongo_connect(connection = str(obj))
+        objid = int(qs.objid)
+        if qs.guest_uid:
+            ds = conn.find_one({'objectid':objid})
+            guest_nc = base64.decodestring(nc).decode('utf-8')
+            if not ds:
+                html_m = '<div class="item"><dl><dt class="png-fix"><a href="/home/profile/index/%s"><img src="http://avatar.hunantv.com/%d/%s_48_48.jpg?r="></a></dt><dd class="name"> <a href="/home/profile/index/%s">%s</a></dd><dd class="time">%s</dd></dl></div><div class="fix"></div>'%(qs.guest_uid,int(qs.guest_uid)%255,qs.guest_uid,qs.guest_uid,guest_nc,'刚刚'.decode('utf8'))
+                ds = {'objectid':objid,qs.guest_uid:{'nc':guest_nc,'ts':int(qs.guest_ts)}}
+                thread.start_new_thread(conn.insert,(ds,))
+                return qs.jsoncallback+'('+simplejson.dumps({'msg':html_m,'err':0})+');'
+            else:
+                del ds['_id']
+                del ds['objectid']
+                ds[qs.guest_uid] = {'nc':guest_nc,'ts':int(qs.guest_ts)}
+                seq = sorted(ds.items(), key=lambda x: x[1]['ts'],reverse = True)[0:pos]
+                html_m = ''.join(map(lambda x:'<div class="item"><dl><dt class="png-fix"><a href="/home/profile/index/%s"><img src="http://avatar.hunantv.com/%d/%s_48_48.jpg?r="></a></dt><dd class="name"> <a href="/home/profile/index/%s">%s</a></dd><dd class="time">%s</dd></dl></div>'%(x[0],int(x[0])%255,x[0],x[0],x[1]['nc'],gettime(now-x[1]['ts']).decode('utf8')),seq))
+                main = {'objectid':objid}
+                main.update(ds)
+                thread.start_new_thread(conn.update,({'objectid':objid},main))
+                return qs.jsoncallback+'('+simplejson.dumps({'msg':html_m+'<div class="fix"></div>','err':0})+');'
+        else:
+            ds = conn.find_one({'objectid':objid})
+            if not ds: return qs.jsoncallback+'('+simplejson.dumps({'msg':'<div class="item"><dl><dt class="png-fix"><a href="/home/profile/index/0"><img src="http://avatar.hunantv.com/0/1_48_48.jpg?r="></a></dt><dd class="name"> <a href="#">无名芒果</a></dd><dd class="time">此刻哦</dd></dl></div><div class="fix"></div>','err':0})+');'
+            del ds['_id']
+            del ds['objectid']
+            seq = sorted(ds.items(), key=lambda x: x[1]['ts'],reverse = True)[0:14]
+            html_m = ''.join(map(lambda x:'<div class="item"><dl><dt class="png-fix"><a href="/home/profile/index/%s"><img src="http://avatar.hunantv.com/%d/%s_48_48.jpg?r="></a></dt><dd class="name"> <a href="/home/profile/index/%s">%s</a></dd><dd class="time">%s</dd></dl></div>'%(x[0],int(x[0])%255,x[0],x[0],x[1]['nc'],gettime(now-x[1]['ts']).decode('utf8')),seq))
+            return qs.jsoncallback+'('+simplejson.dumps({'msg':html_m+'<div class="fix"></div>','err':0})+');'
+
+if __name__ == "__main__":
+    web.wsgi.runwsgi = lambda func, addr=None: web.wsgi.runfcgi(func, addr)
+    app.run()
